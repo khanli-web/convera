@@ -1,50 +1,56 @@
-const { json } = require('micro');
 const axios = require('axios');
 
-module.exports = async (req, res) => {
+module.exports = (req, res) => {
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, message: 'Method not allowed' });
   }
 
-  try {
-    const body = await json(req);
-    const { link, target } = body;
+  let body = '';
+  req.on('data', chunk => {
+    body += chunk.toString();
+  });
 
-    if (!link || !target) {
-      return res.status(400).json({ success: false, message: 'Missing link or target' });
+  req.on('end', async () => {
+    try {
+      const parsedBody = JSON.parse(body);
+      const { link, target } = parsedBody;
+
+      if (!link || !target) {
+        return res.status(400).json({ success: false, message: 'Missing link or target' });
+      }
+
+      // Parse the link
+      const { service: sourceService, id: trackId } = parseLink(link);
+      if (sourceService === target) {
+        return res.status(400).json({ success: false, message: 'Source and target cannot be the same' });
+      }
+
+      // Fetch source metadata
+      const sourceMetadata = await fetchMetadata(sourceService, trackId);
+      if (!sourceMetadata) {
+        return res.status(404).json({ success: false, message: 'Track not found on source service' });
+      }
+
+      // Search target service
+      const targetResults = await searchTarget(target, sourceMetadata);
+      if (!targetResults?.length) {
+        return res.status(404).json({ success: false, message: 'Track not found on target service' });
+      }
+
+      // Find best match
+      const bestMatch = findBestMatch(sourceMetadata, targetResults);
+      if (!bestMatch) {
+        return res.status(404).json({ success: false, message: 'No exact match found' });
+      }
+
+      // Generate and return URL
+      const convertedUrl = generateUrl(target, bestMatch.id);
+      res.status(200).json({ success: true, url: convertedUrl });
+    } catch (error) {
+      console.error('Error in /api/convert:', error.message);
+      res.status(500).json({ success: false, message: 'Internal server error' });
     }
-
-    // Parse the link
-    const { service: sourceService, id: trackId } = parseLink(link);
-    if (sourceService === target) {
-      return res.status(400).json({ success: false, message: 'Source and target cannot be the same' });
-    }
-
-    // Fetch source metadata
-    const sourceMetadata = await fetchMetadata(sourceService, trackId);
-    if (!sourceMetadata) {
-      return res.status(404).json({ success: false, message: 'Track not found on source service' });
-    }
-
-    // Search target service
-    const targetResults = await searchTarget(target, sourceMetadata);
-    if (!targetResults?.length) {
-      return res.status(404).json({ success: false, message: 'Track not found on target service' });
-    }
-
-    // Find best match
-    const bestMatch = findBestMatch(sourceMetadata, targetResults);
-    if (!bestMatch) {
-      return res.status(404).json({ success: false, message: 'No exact match found' });
-    }
-
-    // Generate and return URL
-    const convertedUrl = generateUrl(target, bestMatch.id);
-    res.status(200).json({ success: true, url: convertedUrl });
-  } catch (error) {
-    console.error('Error in /api/convert:', error.message);
-    res.status(500).json({ success: false, message: 'Internal server error' });
-  }
+  });
 };
 
 // Helper functions
